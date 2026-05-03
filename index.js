@@ -5,27 +5,38 @@ const sql = require("./db");
 const app = express();
 app.use(express.json());
 
-const API_KEY = process.env.API_KEY;
 const PORT = process.env.PORT || 3000;
 
-if (!API_KEY) {
-  console.error("ERROR: API_KEY environment variable is not set.");
-  process.exit(1);
-}
-
-function authenticateApiKey(req, res, next) {
+async function authenticateApiKey(req, res, next) {
   const key = req.headers["x-api-key"];
 
-  if (!key || key !== API_KEY) {
-    return res.status(401).json({ error: "Unauthorized. Invalid or missing x-api-key header." });
+  if (!key) {
+    return res.status(401).json({ error: "Unauthorized. Missing x-api-key header." });
   }
 
-  next();
+  try {
+    const users = await sql`SELECT id FROM users WHERE api_key = ${key}`;
+
+    if (users.length === 0) {
+      return res.status(401).json({ error: "Unauthorized. Invalid API key." });
+    }
+
+    req.userId = users[0].id;
+    next();
+  } catch (err) {
+    console.error("Error authenticating API key:", err);
+    res.status(500).json({ error: "Authentication failed." });
+  }
 }
 
 app.get("/notes", authenticateApiKey, async (req, res) => {
   try {
-    const notes = await sql`SELECT id, title, content, created_at, updated_at FROM notes ORDER BY created_at DESC`;
+    const notes = await sql`
+      SELECT id, title, content, created_at, updated_at
+      FROM notes
+      WHERE user_id = ${req.userId}
+      ORDER BY created_at DESC
+    `;
     res.json(notes);
   } catch (err) {
     console.error("Error fetching notes:", err);
@@ -37,7 +48,11 @@ app.get("/notes/:id", authenticateApiKey, async (req, res) => {
   const { id } = req.params;
 
   try {
-    const notes = await sql`SELECT id, title, content, created_at, updated_at FROM notes WHERE id = ${id}`;
+    const notes = await sql`
+      SELECT id, title, content, created_at, updated_at
+      FROM notes
+      WHERE id = ${id} AND user_id = ${req.userId}
+    `;
 
     if (notes.length === 0) {
       return res.status(404).json({ error: "Note not found." });
@@ -61,8 +76,8 @@ app.post("/notes", authenticateApiKey, async (req, res) => {
 
   try {
     const rows = await sql`
-      INSERT INTO notes (title, content)
-      VALUES (${title.trim()}, ${sanitizedContent})
+      INSERT INTO notes (user_id, title, content)
+      VALUES (${req.userId}, ${title.trim()}, ${sanitizedContent})
       RETURNING id, title, content, created_at, updated_at
     `;
 
@@ -82,7 +97,10 @@ app.put("/notes/:id", authenticateApiKey, async (req, res) => {
   }
 
   try {
-    const existing = await sql`SELECT id FROM notes WHERE id = ${id}`;
+    const existing = await sql`
+      SELECT id FROM notes
+      WHERE id = ${id} AND user_id = ${req.userId}
+    `;
 
     if (existing.length === 0) {
       return res.status(404).json({ error: "Note not found." });
@@ -96,19 +114,19 @@ app.put("/notes/:id", authenticateApiKey, async (req, res) => {
     if (newTitle !== undefined && newContent !== undefined) {
       [updated] = await sql`
         UPDATE notes SET title = ${newTitle}, content = ${newContent}, updated_at = NOW()
-        WHERE id = ${id}
+        WHERE id = ${id} AND user_id = ${req.userId}
         RETURNING id, title, content, created_at, updated_at
       `;
     } else if (newTitle !== undefined) {
       [updated] = await sql`
         UPDATE notes SET title = ${newTitle}, updated_at = NOW()
-        WHERE id = ${id}
+        WHERE id = ${id} AND user_id = ${req.userId}
         RETURNING id, title, content, created_at, updated_at
       `;
     } else if (newContent !== undefined) {
       [updated] = await sql`
         UPDATE notes SET content = ${newContent}, updated_at = NOW()
-        WHERE id = ${id}
+        WHERE id = ${id} AND user_id = ${req.userId}
         RETURNING id, title, content, created_at, updated_at
       `;
     } else {
@@ -126,7 +144,11 @@ app.delete("/notes/:id", authenticateApiKey, async (req, res) => {
   const { id } = req.params;
 
   try {
-    const deleted = await sql`DELETE FROM notes WHERE id = ${id} RETURNING id`;
+    const deleted = await sql`
+      DELETE FROM notes
+      WHERE id = ${id} AND user_id = ${req.userId}
+      RETURNING id
+    `;
 
     if (deleted.length === 0) {
       return res.status(404).json({ error: "Note not found." });
