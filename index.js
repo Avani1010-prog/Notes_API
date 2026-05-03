@@ -29,6 +29,21 @@ async function authenticateApiKey(req, res, next) {
   }
 }
 
+app.get("/", (req, res) => {
+  res.json({
+    message: "Notes API is running",
+    version: "1.0.0",
+    endpoints: {
+      "GET /notes": "Fetch all notes for authenticated user",
+      "GET /notes/:id": "Fetch a single note by ID",
+      "POST /notes": "Create a new note",
+      "PUT /notes/:id": "Update an existing note",
+      "DELETE /notes/:id": "Delete a note"
+    },
+    auth: "All endpoints require x-api-key header"
+  });
+});
+
 app.get("/notes", authenticateApiKey, async (req, res) => {
   try {
     const notes = await sql`
